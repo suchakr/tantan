@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# manim files
+media/*
+
+
+
 # Distribution / packaging
 .Python
 build/
@@ -121,4 +126,4 @@ dmypy.json
 .vscode/
 
 # ignore files with ~ at the end at any level
-*~
+*~*
