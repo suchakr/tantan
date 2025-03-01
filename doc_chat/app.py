@@ -186,25 +186,64 @@ class DocumentChat:
         
         return unique_relevant_chunks[:3]  # Limit to top 3 unique documents
 
+    def needs_document_context(self, query):
+        """Determine if a query needs document context or can be answered directly."""
+        # Simple keywords that might indicate we need papers context
+        document_keywords = [
+            'paper', 'research', 'study', 'article', 'publication', 'journal', 
+            'publish', 'author', 'work', 'contribution', 'discover', 'theory',
+            'mathematician', 'astronomy', 'history', 'science', 'indian', 'ijhs',
+            'who', 'what', 'when', 'where', 'how', 'why', 'did', 'explain'
+        ]
+        
+        # Direct questions that might not need context
+        direct_patterns = [
+            'who are you', 'your name', 'what can you do', 'hello', 'hi',
+            'help me', 'how do you work', 'what is your purpose',
+            'thanks', 'thank you'
+        ]
+        
+        # Check for direct patterns first
+        query_lower = query.lower()
+        for pattern in direct_patterns:
+            if pattern in query_lower:
+                return False
+                
+        # Check for document keywords
+        for keyword in document_keywords:
+            if keyword.lower() in query_lower:
+                return True
+                
+        # If query is very short, it might be conversational
+        if len(query.split()) < 4:
+            return False
+            
+        # Default to using context for ambiguous queries
+        return True
+
     def generate_response(self, query):
         try:
-            # Get relevant documents
-            relevant_chunks = self.search_documents(query)
-            
-            # Prepare context with chunked content
-            context = "\n".join([
-                f"Title: {chunk['paper']}\nAuthor: {chunk['author']}\nRelevant Extract: {chunk['text']}"
-                for chunk in relevant_chunks
-            ])
-    
-            # Generate response using Gemini with system prompt
-            prompt = f"""Based on the following relevant extracts from IJHS papers, answer this query: {query}
+            if self.needs_document_context(query):
+                # Get relevant documents
+                relevant_chunks = self.search_documents(query)
+                
+                # Prepare context with chunked content
+                context = "\n".join([
+                    f"Title: {chunk['paper']}\nAuthor: {chunk['author']}\nRelevant Extract: {chunk['text']}"
+                    for chunk in relevant_chunks
+                ])
+        
+                # Generate response using Gemini with system prompt and document context
+                prompt = f"""Based on the following relevant extracts from IJHS papers, answer this query: {query}
 
 Context from relevant papers:
 {context}
 
 Please provide a clear and concise response based on the information from these papers."""
-
+            else:
+                # Generate response without document context for general/conversational queries
+                prompt = f"""Please respond to this query without needing additional context: {query}"""
+            
             response = model.generate_content(prompt)
             return response.text, getattr(response, 'usage_metadata', None)
         except Exception as e:
@@ -313,6 +352,7 @@ class NavdhaniUI:
         self.history = []  # Maintain conversation history here
         self.token_stats = {"total_tokens": 0, "prompt_tokens": 0, "response_tokens": 0}
         self.last_prompt = ""
+        self.context_used = False  # Track whether context was used for last response
 
     def update_stats(self, usage_metadata):
         if usage_metadata:
@@ -328,12 +368,18 @@ class NavdhaniUI:
             except Exception as e:
                 print(f"Error updating stats: {str(e)}")
 
+        context_status = "With document context" if self.context_used else "Without document context"
+        
         return f"""Token Usage Statistics:
 Total Tokens: {self.token_stats['total_tokens']}
 Prompt Tokens: {self.token_stats['prompt_tokens']}
-Response Tokens: {self.token_stats['response_tokens']}"""
+Response Tokens: {self.token_stats['response_tokens']}
+Last Query: {context_status}"""
 
     def respond(self, message, chat_history):
+        # Check if document context is needed
+        self.context_used = self.chat.needs_document_context(message)
+        
         # Generate response and update internal history
         response, usage_metadata = self.chat.generate_response(message)
         stats = self.update_stats(usage_metadata)
@@ -341,18 +387,21 @@ Response Tokens: {self.token_stats['response_tokens']}"""
         # Update self.history instead of a local variable
         self.history.append((message, response))
         
-        # Update last prompt with the full context
-        relevant_docs = self.chat.search_documents(message)
-        context = "\n".join([
-            f"Title: {doc['paper']}\nAuthor: {doc['author']}\nContent: {doc['text'][:500]}..."
-            for doc in relevant_docs
-        ])
-        self.last_prompt = f"""Based on the following academic papers from IJHS, answer this query: {message}
+        # Update last prompt with the full context if used
+        if self.context_used:
+            relevant_docs = self.chat.search_documents(message)
+            context = "\n".join([
+                f"Title: {doc['paper']}\nAuthor: {doc['author']}\nContent: {doc['text'][:500]}..."
+                for doc in relevant_docs
+            ])
+            self.last_prompt = f"""Based on the following academic papers from IJHS, answer this query: {message}
 
 Context from relevant papers:
 {context}
 
 Please provide a clear and concise response based on the information from these papers."""
+        else:
+            self.last_prompt = f"""Please respond to this query without needing additional context: {message}"""
         
         return self.history, stats, self.last_prompt
 
@@ -361,6 +410,7 @@ Please provide a clear and concise response based on the information from these 
         self.history = []
         self.token_stats = {"total_tokens": 0, "prompt_tokens": 0, "response_tokens": 0}
         self.last_prompt = ""
+        self.context_used = False
         # Return cleared values to update the UI
         cleared_stats = "Token Usage Statistics:\nTotal Tokens: 0\nPrompt Tokens: 0\nResponse Tokens: 0"
         return self.history, cleared_stats, "No prompt sent yet"
