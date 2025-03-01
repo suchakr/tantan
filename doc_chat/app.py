@@ -8,10 +8,11 @@ import google.generativeai as genai
 from google.generativeai import GenerationConfig
 from dotenv import load_dotenv , find_dotenv
 from sklearn.feature_extraction.text import TfidfVectorizer
-from typing import cast, List, Dict
+from typing import cast, List, Dict, TypedDict
 from scipy.sparse import spmatrix
 import nltk
 from nltk.tokenize import sent_tokenize
+import json
 
 import logging
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
@@ -51,13 +52,31 @@ Your role is to:
 Always base your responses on the context provided from the papers. When you refer to any paper, hyperlink the paper to its url.  If asked about topics outside the scope of the given papers, politely explain that you can only discuss content from the IJHS papers in your context."""
 
 generation_config = {
-      "temperature": 1,
-      "top_p": 0.95,
-      "top_k": 5,
-      "max_output_tokens": 8192,
-      "response_mime_type": "text/plain"
-    #   "response_mime_type": "application/json",
-    #   "response_schema": PaperClassifications
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 5,
+    "max_output_tokens": 8192,
+    "response_mime_type": "application/json",
+    "response_schema": {
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string"},
+            "references": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "author": {"type": "string"},
+                        "url": {"type": "string"}
+                    },
+                    "required": ["title", "author", "url"]
+                }
+            },
+            "confidence_level": {"type": "string", "enum": ["high", "medium", "low"]}
+        },
+        "required": ["answer", "references", "confidence_level"]
+    }
 }
 
 model = genai.GenerativeModel(
@@ -229,26 +248,73 @@ class DocumentChat:
                 
                 # Prepare context with chunked content
                 context = "\n".join([
-                    f"Title: {chunk['paper']}\nAuthor: {chunk['author']}\nRelevant Extract: {chunk['text']}"
+                    f"Title: {chunk['paper']}\nAuthor: {chunk['author']}\nURL: {chunk['url']}\nRelevant Extract: {chunk['text']}"
                     for chunk in relevant_chunks
                 ])
         
                 # Generate response using Gemini with system prompt and document context
+                query_obj = {
+                    "query": query,
+                    "require_context": True,
+                    "context": {
+                        "documents": [
+                            {
+                                "title": chunk['paper'],
+                                "author": chunk['author'],
+                                "url": chunk['url'],
+                                "extract": chunk['text']
+                            }
+                            for chunk in relevant_chunks
+                        ]
+                    }
+                }
+                
                 prompt = f"""Based on the following relevant extracts from IJHS papers, answer this query: {query}
 
 Context from relevant papers:
 {context}
 
-Please provide a clear and concise response based on the information from these papers."""
+Please provide a clear and concise response based on the information from these papers.
+Your response must conform to the JSON schema provided in the system instructions."""
             else:
                 # Generate response without document context for general/conversational queries
-                prompt = f"""Please respond to this query without needing additional context: {query}"""
+                query_obj = {
+                    "query": query,
+                    "require_context": False
+                }
+                
+                prompt = f"""Please respond to this query without needing additional context: {query}
+Your response must conform to the JSON schema provided in the system instructions."""
             
             response = model.generate_content(prompt)
-            return response.text, getattr(response, 'usage_metadata', None)
+            
+            # Parse the JSON response
+            try:
+                if hasattr(response, 'parts') and len(response.parts) > 0 and hasattr(response.parts[0], 'text'):
+                    response_json = json.loads(response.parts[0].text)
+                else:
+                    response_json = json.loads(response.text)
+                
+                # Return structured data and usage metadata
+                return response_json, getattr(response, 'usage_metadata', None)
+            except json.JSONDecodeError:
+                # Fallback for non-JSON responses
+                logging.warning("Received non-JSON response from LLM")
+                fallback_response = {
+                    "answer": response.text,
+                    "references": [],
+                    "confidence_level": "low"
+                }
+                return fallback_response, getattr(response, 'usage_metadata', None)
+        
         except Exception as e:
             print(f"Error generating response: {str(e)}")
-            return f"Error: {str(e)}", None
+            error_response = {
+                "answer": f"Error: {str(e)}",
+                "references": [],
+                "confidence_level": "low"
+            }
+            return error_response, None
         
 #%%
 # Run this block to test the DocumentChat class and its methods
@@ -381,11 +447,24 @@ Last Query: {context_status}"""
         self.context_used = self.chat.needs_document_context(message)
         
         # Generate response and update internal history
-        response, usage_metadata = self.chat.generate_response(message)
+        response_data, usage_metadata = self.chat.generate_response(message)
         stats = self.update_stats(usage_metadata)
         
-        # Update self.history instead of a local variable
-        self.history.append((message, response))
+        # Format the response for display
+        formatted_response = response_data["answer"]
+        
+        # Add references if they exist
+        if response_data.get("references") and len(response_data["references"]) > 0:
+            formatted_response += "\n\nReferences:"
+            for ref in response_data["references"]:
+                formatted_response += f"\n- {ref['title']} by {ref['author']} - {ref['url']}"
+        
+        # Add confidence level
+        if response_data.get("confidence_level"):
+            formatted_response += f"\n\nConfidence: {response_data['confidence_level']}"
+        
+        # Update self.history
+        self.history.append((message, formatted_response))
         
         # Update last prompt with the full context if used
         if self.context_used:
@@ -399,9 +478,9 @@ Last Query: {context_status}"""
 Context from relevant papers:
 {context}
 
-Please provide a clear and concise response based on the information from these papers."""
+Please provide a clear and concise response based on the information from these papers in JSON format."""
         else:
-            self.last_prompt = f"""Please respond to this query without needing additional context: {message}"""
+            self.last_prompt = f"""Please respond to this query without needing additional context: {message} in JSON format."""
         
         return self.history, stats, self.last_prompt
 
@@ -465,3 +544,13 @@ if __name__ == "__main__" :
     ui = NavdhaniUI()
     ui.launch()
 # %%
+# Define response schema for structured output
+class PaperReference(TypedDict):
+    title: str
+    author: str
+    url: str
+
+class StructuredResponse(TypedDict):
+    answer: str
+    references: List[PaperReference]
+    confidence_level: str  # "high", "medium", "low"
