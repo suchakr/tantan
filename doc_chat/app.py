@@ -205,8 +205,120 @@ class DocumentChat:
         
         return unique_relevant_chunks[:3]  # Limit to top 3 unique documents
 
+    def is_aggregation_query(self, query):
+        """Determine if the query is asking for an aggregation/summary of the papers database."""
+        query_lower = query.lower()
+        
+        # Patterns that indicate aggregation queries
+        aggregation_patterns = [
+            'how many papers', 'how many documents', 'how many articles', 'paper count',
+            'list all papers', 'list the papers', 'list papers', 'list all documents',
+            'show me all papers', 'show all articles', 'show all documents',
+            'what papers do you have', 'what papers do you know', 'what documents are available',
+            'summarize the papers', 'summarize the collection', 'summarize the documents',
+            'which authors', 'list authors', 'how many authors',
+            'most cited', 'most popular', 'most common topics',
+            'papers by year', 'papers by author', 'papers by topic',
+            'statistics on papers', 'statistics on the collection',
+            'what years', 'which years', 'date range', 'year range',
+            'overview of papers', 'overview of the collection', 'overview of documents'
+        ]
+        
+        for pattern in aggregation_patterns:
+            if pattern in query_lower:
+                return True
+                
+        return False
+
+    def perform_aggregation(self, query):
+        """Generate aggregation results based on the query intent."""
+        query_lower = query.lower()
+        
+        # Basic collection statistics
+        papers_count = len(self.df['paper'].unique()) if self.df is not None else 0
+        authors_count = len(self.df['author'].unique()) if self.df is not None else 0
+        
+        # Initialize the response structure
+        result = {
+            "answer": "",
+            "references": [],
+            "confidence_level": "high"  # Aggregations are based on actual data, so confidence is high
+        }
+        
+        # Handle different aggregation types
+        if any(p in query_lower for p in ['how many papers', 'paper count', 'document count']):
+            result["answer"] = f"I have information about {papers_count} papers from the Indian Journal of History of Science."
+            
+        elif any(p in query_lower for p in ['list papers', 'list all papers', 'show papers', 'what papers']):
+            papers_list = self.df['paper'].unique().tolist() if self.df is not None else []
+            papers_text = "\n".join([f"- {paper}" for paper in papers_list])
+            result["answer"] = f"Here are the {papers_count} papers in my collection:\n\n{papers_text}"
+            
+        elif any(p in query_lower for p in ['how many authors', 'author count']):
+            result["answer"] = f"There are {authors_count} unique authors in the collection of papers I have access to."
+            
+        elif any(p in query_lower for p in ['list authors', 'show authors', 'which authors']):
+            authors_list = self.df['author'].unique().tolist() if self.df is not None else []
+            authors_text = "\n".join([f"- {author}" for author in authors_list])
+            result["answer"] = f"Here are the {authors_count} authors in my collection:\n\n{authors_text}"
+            
+        elif any(p in query_lower for p in ['papers by author', 'which papers by']):
+            # Extract author name if it exists in the query
+            # This is a simple approach; might need more sophisticated NLP
+            author_name = None
+            for word in query_lower.split('by '):
+                if len(word) > 0 and word not in ['papers', 'author']:
+                    author_name = word.strip()
+                    break
+                    
+            if author_name:
+                matching_papers = self.df[self.df['author'].str.lower().str.contains(author_name)]['paper'].unique().tolist()
+                if matching_papers:
+                    papers_text = "\n".join([f"- {paper}" for paper in matching_papers])
+                    result["answer"] = f"Here are papers by authors matching '{author_name}':\n\n{papers_text}"
+                else:
+                    result["answer"] = f"I couldn't find any papers by authors matching '{author_name}' in my collection."
+            else:
+                # If no author specified, give a breakdown of papers per author
+                author_counts = self.df.groupby('author')['paper'].nunique().sort_values(ascending=False)
+                author_breakdown = "\n".join([f"- {author}: {count} papers" for author, count in author_counts.items()[:15]])  # Top 15
+                result["answer"] = f"Here's a breakdown of papers by author (showing top 15):\n\n{author_breakdown}"
+                
+        elif 'statistics' in query_lower or 'overview' in query_lower or 'summarize' in query_lower:
+            # Provide overall statistics about the collection
+            result["answer"] = (
+                f"Collection Statistics:\n"
+                f"- Total papers: {papers_count}\n"
+                f"- Total unique authors: {authors_count}\n"
+                f"- Papers with URLs: {self.df['url'].notna().sum()}\n"
+                f"- Average text length: {int(self.df['text'].str.len().mean())} characters"
+            )
+        else:
+            # Default aggregation response
+            result["answer"] = (
+                f"I have a collection of {papers_count} papers from the Indian Journal of History of Science, "
+                f"written by {authors_count} different authors. You can ask me to list the papers, "
+                f"show papers by a specific author, or get other statistics about the collection."
+            )
+            
+        # Add sample references to guide the user
+        if len(self.df) > 0:
+            sample_papers = self.df.sample(min(3, len(self.df)))
+            for _, paper in sample_papers.iterrows():
+                result["references"].append({
+                    "title": paper['paper'],
+                    "author": paper['author'],
+                    "url": paper['url'] if pd.notna(paper['url']) else ""
+                })
+                
+        return result
+
     def needs_document_context(self, query):
         """Determine if a query needs document context or can be answered directly."""
+        # First check if this is an aggregation query
+        if self.is_aggregation_query(query):
+            return False
+            
         # Simple keywords that might indicate we need papers context
         document_keywords = [
             'paper', 'research', 'study', 'article', 'publication', 'journal', 
@@ -242,7 +354,13 @@ class DocumentChat:
 
     def generate_response(self, query):
         try:
-            if self.needs_document_context(query):
+            # Check if this is an aggregation query
+            if self.is_aggregation_query(query):
+                # Handle aggregation directly without LLM
+                return self.perform_aggregation(query), None
+            
+            # For non-aggregation queries, continue with the existing flow
+            elif self.needs_document_context(query):
                 # Get relevant documents
                 relevant_chunks = self.search_documents(query)
                 
@@ -326,8 +444,30 @@ def test_DocumentChat():
     print(response)
     print(usage_metadata)
 
+def test_aggregation_queries():
+    chat = DocumentChat()
+    queries = [
+        "How many papers do you have?",
+        "List all papers in your collection",
+        "How many authors are there?",
+        "List authors in your collection",
+        "What papers do you have by author Aryabhata?",
+        "Summarize the collection",
+        "Show me statistics on the papers",
+        "What years are covered in the collection?",
+        "Overview of the documents"
+    ]
+    
+    for query in queries:
+        print(f"Query: {query}")
+        response = chat.perform_aggregation(query)
+        print(response)
+        print() # Add a newline
+
 if gInteractive:
     test_DocumentChat()
+    test_aggregation_queries()
+
 
 
 #%%
@@ -538,19 +678,14 @@ if __name__ == "__main__":
     ui = NavdhaniUI()
     ui.launch()
 
-#%%
-
-if __name__ == "__main__" :
-    ui = NavdhaniUI()
-    ui.launch()
 # %%
-# Define response schema for structured output
-class PaperReference(TypedDict):
-    title: str
-    author: str
-    url: str
+# # Define response schema for structured output
+# class PaperReference(TypedDict):
+#     title: str
+#     author: str
+#     url: str
 
-class StructuredResponse(TypedDict):
-    answer: str
-    references: List[PaperReference]
-    confidence_level: str  # "high", "medium", "low"
+# class StructuredResponse(TypedDict):
+#     answer: str
+#     references: List[PaperReference]
+#     confidence_level: str  # "high", "medium", "low"
