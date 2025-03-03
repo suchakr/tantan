@@ -1,4 +1,24 @@
 #%%
+
+"""
+Document Chat Application with Gemini AI
+
+This program implements a specialized academic document chat system ('Navadhāni') focused on
+academic papers from the Indian Journal of History of Science (IJHS). It provides:
+
+1. Document search and retrieval via TF-IDF vectorization and FAISS similarity search
+2. Text chunking for effective context management
+3. Integration with Google's Gemini API for natural language understanding
+4. Structured JSON responses with references and confidence levels
+5. Ability to handle both document-specific queries and collection-level statistics
+6. A Gradio-based UI for interactive conversations
+7. Token usage tracking and conversation history management
+
+The application processes paper content from a TSV file, creates searchable chunks,
+and provides context-aware responses using the Gemini model.
+"""
+
+#%%
 import os
 import pandas as pd
 import numpy as np
@@ -230,8 +250,9 @@ class DocumentChat:
                 
         return False
 
-    def perform_aggregation(self, query):
-        """Generate aggregation results based on the query intent."""
+    def perform_aggregation_naive(self, query):
+        """Generate aggregation results based on the query intent using simple pattern matching.
+        This is a naive approach and serves as a fallback."""
         query_lower = query.lower()
         
         # Basic collection statistics
@@ -312,6 +333,143 @@ class DocumentChat:
                 })
                 
         return result
+
+    def perform_aggregation(self, query):
+        """Generate aggregation results by executing dynamic pandas operations based on query intent.
+        This approach uses Python data manipulation for more sophisticated analysis."""
+        
+        if self.df is None or len(self.df) == 0:
+            return {
+                "answer": "I don't have any document data loaded to analyze.",
+                "references": [],
+                "confidence_level": "high"
+            }
+            
+        # Initialize result structure
+        result = {
+            "answer": "",
+            "references": [],
+            "confidence_level": "high"
+        }
+        
+        query_lower = query.lower()
+        
+        try:
+            # Basic counts and lists
+            if any(p in query_lower for p in ['how many papers', 'paper count', 'document count']):
+                paper_count = self.df['paper'].nunique()
+                result["answer"] = f"I have information about {paper_count} papers from the Indian Journal of History of Science."
+                
+            elif any(p in query_lower for p in ['list papers', 'list all papers', 'show papers', 'what papers']):
+                papers = self.df['paper'].unique().tolist()
+                papers_text = "\n".join([f"- {paper}" for paper in papers])
+                result["answer"] = f"Here are the {len(papers)} papers in my collection:\n\n{papers_text}"
+                
+            elif any(p in query_lower for p in ['how many authors', 'author count']):
+                author_count = self.df['author'].nunique()
+                result["answer"] = f"There are {author_count} unique authors in the collection of papers I have access to."
+                
+            elif any(p in query_lower for p in ['list authors', 'show authors', 'which authors']):
+                authors = self.df['author'].unique().tolist()
+                authors_text = "\n".join([f"- {author}" for author in authors])
+                result["answer"] = f"Here are the {len(authors)} authors in my collection:\n\n{authors_text}"
+                
+            # Papers by specific author
+            elif any(p in query_lower for p in ['papers by author', 'which papers by']):
+                # Extract potential author name from query
+                author_name = None
+                for pattern in ['by author', 'by', 'author']:
+                    if pattern in query_lower:
+                        parts = query_lower.split(pattern)
+                        if len(parts) > 1 and parts[1].strip():
+                            author_name = parts[1].strip()
+                            break
+                
+                if author_name:
+                    # Use case-insensitive search
+                    matching_papers = self.df[self.df['author'].str.lower().str.contains(author_name)]
+                    
+                    if not matching_papers.empty:
+                        papers_by_author = matching_papers.groupby('author')['paper'].unique()
+                        
+                        answer_parts = [f"Papers by authors matching '{author_name}':"]
+                        for author, papers in papers_by_author.items():
+                            answer_parts.append(f"\n{author}:")
+                            for paper in papers:
+                                answer_parts.append(f"- {paper}")
+                        
+                        result["answer"] = "\n".join(answer_parts)
+                        
+                        # Add matching papers as references
+                        for _, row in matching_papers.drop_duplicates(subset=['paper']).iterrows():
+                            result["references"].append({
+                                "title": row['paper'],
+                                "author": row['author'],
+                                "url": row['url'] if pd.notna(row['url']) else ""
+                            })
+                    else:
+                        result["answer"] = f"I couldn't find any papers by authors matching '{author_name}' in my collection."
+                else:
+                    # No specific author mentioned, show distribution
+                    author_paper_counts = self.df.groupby('author')['paper'].nunique().sort_values(ascending=False)
+                    top_authors = author_paper_counts.head(15)
+                    
+                    answer_parts = ["Here's a breakdown of papers by author (showing top 15):"]
+                    for author, count in top_authors.items():
+                        answer_parts.append(f"- {author}: {count} papers")
+                    
+                    result["answer"] = "\n".join(answer_parts)
+                    
+            # Overall collection statistics
+            elif 'statistics' in query_lower or 'overview' in query_lower or 'summarize' in query_lower:
+                # Calculate various statistics
+                text_lengths = self.df['text'].str.len()
+                url_count = self.df['url'].notna().sum()
+                
+                # Create detailed statistics
+                stats = {
+                    "Total papers": self.df['paper'].nunique(),
+                    "Unique authors": self.df['author'].nunique(),
+                    "Papers with URLs": url_count,
+                    "Average text length": int(text_lengths.mean()),
+                    "Longest paper": int(text_lengths.max()),
+                    "Shortest paper": int(text_lengths.min()),
+                    "Authors with most papers": self.df.groupby('author')['paper'].nunique().nlargest(3).to_dict()
+                }
+                
+                answer_parts = ["Collection Statistics:"]
+                for key, value in stats.items():
+                    if isinstance(value, dict):
+                        answer_parts.append(f"- {key}:")
+                        for subkey, subvalue in value.items():
+                            answer_parts.append(f"  - {subkey}: {subvalue} papers")
+                    else:
+                        if "length" in key.lower():
+                            answer_parts.append(f"- {key}: {value} characters")
+                        else:
+                            answer_parts.append(f"- {key}: {value}")
+                
+                result["answer"] = "\n".join(answer_parts)
+                
+            else:
+                # Fall back to the naive implementation for unhandled query types
+                return self.perform_aggregation_naive(query)
+                
+            # Add sample references if we don't have specific ones yet
+            if not result["references"] and len(self.df) > 0:
+                sample_papers = self.df.sample(min(3, len(self.df)))
+                for _, paper in sample_papers.iterrows():
+                    result["references"].append({
+                        "title": paper['paper'],
+                        "author": paper['author'],
+                        "url": paper['url'] if pd.notna(paper['url']) else ""
+                    })
+                    
+            return result
+            
+        except Exception as e:
+            logging.warning(f"Error in advanced aggregation: {str(e)}. Falling back to naive implementation.")
+            return self.perform_aggregation_naive(query)
 
     def needs_document_context(self, query):
         """Determine if a query needs document context or can be answered directly."""
@@ -469,87 +627,6 @@ if gInteractive:
     test_aggregation_queries()
 
 
-
-#%%
-class NavdhaniUIPrev:
-    def __init__(self):
-        self.chat = DocumentChat()
-        self.history = []
-        self.token_stats = {"total_tokens": 0, "prompt_tokens": 0, "response_tokens": 0}
-        self.last_prompt = ""
-
-    def update_stats(self, usage_metadata):
-        if usage_metadata:
-            try:
-                # Update token statistics
-                prompt_tokens = getattr(usage_metadata, 'prompt_token_count', 0)
-                completion_tokens = getattr(usage_metadata, 'candidates_token_count', 0)
-                total_tokens = getattr(usage_metadata, 'total_token_count', 0)
-                
-                self.token_stats["prompt_tokens"] += prompt_tokens
-                self.token_stats["response_tokens"] += completion_tokens
-                self.token_stats["total_tokens"] += total_tokens
-
-            except Exception as e:
-                print(f"Error updating stats: {str(e)}")
-        
-        return f"""Token Usage Statistics:
-Total Tokens: {self.token_stats['total_tokens']}
-Prompt Tokens: {self.token_stats['prompt_tokens']}
-Response Tokens: {self.token_stats['response_tokens']}"""
-
-    def respond(self, message, history):
-        if not history:
-            history = []
-        
-        response, usage_metadata = self.chat.generate_response(message)
-        stats = self.update_stats(usage_metadata)
-        history.append((message, response))
-        
-        # Update last prompt with the full context
-        relevant_docs = self.chat.search_documents(message)
-        context = "\n".join([
-            f"Title: {doc['paper']}\nAuthor: {doc['author']}\nContent: {doc['text'][:500]}..."
-            for doc in relevant_docs
-        ])
-        self.last_prompt = f"""Based on the following academic papers from IJHS, answer this query: {message}
-
-Context from relevant papers:
-{context}
-
-Please provide a clear and concise response based on the information from these papers."""
-        
-        return history, stats, self.last_prompt
-
-    def launch(self):
-        with gr.Blocks() as interface:
-            with gr.Row():
-                with gr.Column(scale=2):
-                    chatbot = gr.Chatbot(height=600)
-                    msg = gr.Textbox(
-                        show_label=False,
-                        placeholder="Type your message here...",
-                    )
-                with gr.Column(scale=1):
-                    stats_display = gr.Textbox(
-                        label="Statistics",
-                        interactive=False,
-                        value="Token Usage Statistics:\nTotal Tokens: 0\nPrompt Tokens: 0\nResponse Tokens: 0"
-                    )
-                    prompt_display = gr.Textbox(
-                        label="Last Prompt",
-                        interactive=False,
-                        value="No prompt sent yet",
-                        lines=10
-                    )
-
-            msg.submit(
-                self.respond,
-                [msg, chatbot],
-                [chatbot, stats_display, prompt_display]
-            )
-
-        interface.launch()
 
 #%%
 class NavdhaniUI:
