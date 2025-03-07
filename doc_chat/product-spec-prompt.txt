@@ -1,0 +1,33 @@
+Generate a Product spec for python app called navadhani as a markdown file
+Store the content in a file called navadhani-product-spec.md
+
+ The app should allow users to converse with the contents of ijhs-astro-math-docs.tsv , who columns are as follows:
+    #                   int64   (index - ignore)
+    paper              object   (title)
+    author             object   (author)
+    url                object   (url)
+    size_in_kb        float64   (size_in_kb - ignore)
+    cum_size_in_kb    float64   (cum_size_in_kb - ignore)   
+    subject            object   (one of the following: 'math', 'astro') 
+    category           object   (one of the following: 'indic', 'western', 'other' - ignore)
+    pdf                object   (pdf file name - ignore)
+    full_pdf_path      object   (full path to pdf file - ignore)
+    pdf_exists           bool   (always True -ignore) 
+    has_text             bool   (one of raster or text - ignore)
+    text               object   (content)
+
+For LLM use google.generativeai as genai. GEMINI_API_KEY is set in a .env file and loaded using dotenv()
+For UI use Gradio
+Use a local vectordb to store the ijhs-astro-math-docs.tsv data
+
+The app UI should have the following features:
+- Two panes, one for the chat and one for stats about the chat
+- The chat pane should have a text input anchored to the bottom for the user to type their message
+- The chat pane should have a list of messages, chronologically ordered, with the user and bot messages styled differently
+- The stats pane should show token usage stats from gemini response usge_metadata
+
+When User types a query, the app should:
+- Use the query to search the ijhs-astro-math-docs.tsv text column. Consider using a vector search library like faiss or nmslib
+- Use the top 5 results to generate a response using the genai gemini api
+- Display the response in the chat pane
+- Update the stats pane with the token usage stats from the gemini response

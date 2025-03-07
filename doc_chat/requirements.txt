@@ -1,0 +1,10 @@
+pandas
+numpy
+faiss-cpu
+gradio
+google-generativeai==0.8.4
+python-dotenv
+scikit-learn
+nltk
+websockets>=13.0
+urllib3>=2.0.0
