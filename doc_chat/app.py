@@ -16,6 +16,7 @@ Features:
 
 import os
 import json
+import time
 import logging
 from typing import List, Dict, TypedDict, Optional, Tuple, Any, cast, Union
 from dataclasses import dataclass
@@ -72,7 +73,8 @@ class DocumentChunk:
 class DocumentChat:
     """Handles document processing, searching, and response generation"""
     
-    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 100, prompt_name: str = ""):
+    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 100, prompt_name: str = "" ,
+                 tsv_file: str='ijhs-astro-math-docs.tsv'):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.df: Optional[pd.DataFrame] = None
@@ -80,13 +82,14 @@ class DocumentChat:
         self.vectorizer: Optional[TfidfVectorizer] = None
         self.document_embeddings: Optional[np.ndarray] = None
         self.index: Optional[faiss.IndexFlatL2] = None
+        self.query_type: str = "document"
         
         # Get the system prompt based on the provided name (or default if None)
         system_prompt = get_prompt(prompt_name)
         
         # Initialize Gemini model with the selected system prompt
-        genai.configure(api_key=GOOGLE_API_KEY)
-        self.model = genai.GenerativeModel(
+        genai.configure(api_key=GOOGLE_API_KEY)  # type: ignore
+        self.model = genai.GenerativeModel(      # type: ignore
             model_name="gemini-2.0-flash-exp",
             generation_config=generation_config,
             system_instruction=system_prompt,
@@ -98,7 +101,7 @@ class DocumentChat:
         except LookupError:
             nltk.download('punkt')
             
-        self.load_and_process_data()
+        self.load_and_process_data(tsv_file=tsv_file)
 
     def create_chunks(self, text: str) -> List[str]:
         """Split text into overlapping chunks for better context management"""
@@ -127,17 +130,26 @@ class DocumentChat:
             
         return chunks
 
-    def load_and_process_data(self):
+    def load_and_process_data(self, tsv_file='ijhs-astro-math-docs.tsv'):
         """Load and process the document data, creating searchable chunks"""
         try:
-            self.df = pd.read_csv('ijhs-astro-math-docs.tsv', sep='\t').drop(
+            self.df = pd.read_csv(tsv_file, sep='\t').drop(
                 columns=['size_in_kb', 'cum_size_in_kb', 'pdf', 'full_pdf_path', 'pdf_exists', 'has_text']
             )
+            # print(self.df.shape)
+            self.df = self.df.dropna(subset=['text'])
+            # print(self.df.shape)
+            # self.df['text'] = self.df['text'].str.replace('\n', ' ')
             
             # Create chunks for each document
             chunks_data = []
             for idx, row in self.df.iterrows():
-                text_chunks = self.create_chunks(row['text'])
+                # print(row)
+                text_chunks = self.create_chunks(
+                    row['author'] 
+                    + " " + row['paper'] 
+                    + " " + row['text']
+                    )
                 for chunk_idx, chunk in enumerate(text_chunks):
                     chunks_data.append(DocumentChunk(
                         paper=row['paper'],
@@ -160,17 +172,18 @@ class DocumentChat:
             self.index = faiss.IndexFlatL2(dim)
             if self.document_embeddings is not None:
                 self.index.add(self.document_embeddings)
+            logging.info("Search components initialized successfully")
             
         except FileNotFoundError:
-            logging.error("ijhs-astro-math-docs.tsv not found")
+            logging.error(f"{tsv_file} not found")
             raise
 
-    def search_documents(self, query: str, k: int = 15) -> List[Dict]:
+    def search_documents(self, query: str, k: int = 5) -> List[Dict]:
         """Search for relevant document chunks based on query similarity"""
         if not isinstance(self.vectorizer, TfidfVectorizer) or self.index is None or self.chunks_df is None:
             raise ValueError("Search components not initialized")
             
-        query_matrix: csr_matrix = self.vectorizer.transform([query])
+        query_matrix: csr_matrix = self.vectorizer.transform([query])  # type: ignore
         query_vector = query_matrix.toarray().astype(np.float32)
         
         # Use standard FAISS search API with proper return values
@@ -205,35 +218,34 @@ class DocumentChat:
         ]
         
         return any(pattern in query_lower for pattern in aggregation_patterns)
-
-    def needs_document_context(self, query: str) -> bool:
-        """Determine if a query requires document context for answering"""
-        if self.is_aggregation_query(query):
-            return False
-        
+    
+    def is_conversational_query(self, query: str) -> bool:
+        """Determine if the query is conversational in nature"""
         conversational_patterns = [
             'who are you', 'your name', 'what can you do', 'hello', 'hi',
             'help me', 'how do you work', 'what is your purpose',
             'thanks', 'thank you'
         ]
-        query_lower = query.lower()
-        
-        # Check for conversational patterns first
-        if any(pattern in query_lower for pattern in conversational_patterns):
+
+        return any(pattern in query.lower() for pattern in conversational_patterns
+                  ) and not self.is_aggregation_query(query)
+
+    def needs_document_context(self, query: str) -> bool:
+        """Determine if a query requires document context for answering"""
+
+        # Check for conversational queries
+        if self.is_conversational_query(query):
+            self.query_type = "conversational"
             return False
-        
-        document_keywords = [
-            'paper', 'research', 'study', 'article', 'publication',
-            'author', 'work', 'contribution', 'discover', 'theory',
-            'mathematician', 'astronomy', 'history', 'science', 'indian',
-            'who', 'what', 'when', 'where', 'how', 'why', 'explain'
-        ] 
-        # Check for document-related keywords
-        if any(keyword in query_lower for keyword in document_keywords):
-            return True
-            
-        # Default to using context for longer queries
-        return len(query.split()) >= 4
+
+        # Check for aggregation queries
+        # These queries often require collection-level statistics
+        if self.is_aggregation_query(query):
+            self.query_type = "aggregation"
+            return False
+    
+        self.query_type = "document"
+        return True
 
     def perform_aggregation(self, query: str) -> Dict:
         """Generate collection-level statistics and aggregations"""
@@ -447,57 +459,12 @@ Please provide a clear and concise response based on these papers."""
                 "confidence_level": "low"
             }, None
         
-#%%
-# # Run this block to test the DocumentChat class and its methods
-# def test_DocumentChat():
-#     chat = DocumentChat()
-#     query = "What are the contributions of Indian mathematicians to the field of astronomy?"
-#     # print(chat.search_documents(query))
-#     response, usage_metadata = chat.generate_response(query)
-#     print(response)
-#     print(usage_metadata)
-
-# def test_aggregation_queries():
-#     chat = DocumentChat()
-#     queries = [
-#         "How many papers do you have?",
-#         "List all papers in your collection",
-#         "How many authors are there?",
-#         "List authors in your collection",
-#         "What papers do you have by author Aryabhata?",
-#         "Summarize the collection",
-#         "Show me statistics on the papers",
-#         "What years are covered in the collection?",
-#         "Overview of the documents"
-#     ]
-    
-#     for query in queries:
-#         print(f"Query: {query}")
-#         response = chat.perform_aggregation(query)
-#         print(response)
-#         print() # Add a newline
-
-# def test_system_prompts():
-#     print("Testing different system prompts...")
-    
-#     for prompt_name in [None, "conversational", "expert"]:
-#         print(f"\nTesting with prompt: {prompt_name or 'default'}")
-#         chat = DocumentChat(prompt_name=prompt_name)
-#         query = "Tell me about Indian contributions to calculus"
-#         response, _ = chat.generate_response(query)
-#         print(f"Response with {prompt_name or 'default'} prompt:")
-#         print(response["answer"][:200] + "..." if len(response["answer"]) > 200 else response["answer"])
-
-# if INTERACTIVE_MODE:
-#     test_DocumentChat()
-#     test_aggregation_queries()
-#     test_system_prompts()
 
 #%%
 class NavdhaniUI:
     """Handles the Gradio-based user interface and conversation management"""
     
-    def __init__(self, prompt_name=None):
+    def __init__(self, prompt_name=""):
         try:
             self.chat = DocumentChat(prompt_name=prompt_name)
         except Exception as e:
@@ -512,6 +479,7 @@ class NavdhaniUI:
         }
         self.last_prompt: str = ""
         self.context_used: bool = False
+        self.query_type: str = "document"
         self.prompt_name = prompt_name or "default"
 
     def update_stats(self, usage_metadata: Optional[Any]) -> str:
@@ -527,13 +495,13 @@ class NavdhaniUI:
         except Exception as e:
             logging.warning(f"Error updating token stats: {str(e)}")
 
-        context_status = "With document context" if self.context_used else "Without document context"
+        # context_status = "With document context" if self.context_used else "Without document context"
         return f"""Token Usage Statistics:
 Total Tokens: {self.token_stats['total_tokens']}
 Prompt Tokens: {self.token_stats['prompt_tokens']}
 Response Tokens: {self.token_stats['response_tokens']}
 System Prompt: {self.prompt_name}
-Last Query: {context_status}"""
+Query Type: {self.query_type}"""
 
     def respond(
         self, 
@@ -546,6 +514,7 @@ Last Query: {context_status}"""
                 return self.history, self.update_stats(None), "Empty query"
                 
             self.context_used = self.chat.needs_document_context(message)
+            self.query_type = self.chat.query_type
             response_data, usage_metadata = self.chat.generate_response(message)
             
             # Format the response with references and confidence level
@@ -728,7 +697,12 @@ if __name__ == "__main__":
 
         # Initialize UI with default prompt
         ui = NavdhaniUI()
+        logging.info("Starting Gradio interface...")
+        start_time = time.time()
         ui.launch()
+        # Note: Code after launch() won't execute until the Gradio server is shut down
+        elapsed_time = time.time() - start_time
+        logging.info(f"Gradio interface took {elapsed_time:.2f} seconds to launch")
     except Exception as e:
         logging.error(f"Application startup failed: {e}")
         raise
