@@ -44,7 +44,7 @@ Your responses should maintain advanced scholarly standards while still being ac
 When discussing papers, include publication years and relevant contextual information about the research methodology."""
 
 # Get a system prompt by name
-def get_prompt(prompt_name=None):
+def get_prompt(prompt_name=""):
     """Get a system prompt by name, or return the default prompt if name is None or not found"""
     prompts = {
         None: DEFAULT_PROMPT,
