@@ -45,6 +45,7 @@ htmlcov/
 .nox/
 .coverage
 .coverage.*
+.coverage.xml
 .cache
 nosetests.xml
 coverage.xml
@@ -93,6 +94,11 @@ celerybeat-schedule
 # SageMath parsed files
 *.sage.py
 
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
 # Environments
 .env
 .venv
@@ -112,24 +118,26 @@ venv.bak/
 # mkdocs documentation
 /site
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
 # Pyre type checker
 .pyre/
 
-# VS Code
-.vscode/
-
-# IDE specific files (added from doc_chat/.gitignore)
+# IDE files
 .idea/
+.vscode/
+*.suo
+*.user
+*.iml
+*.db
 *.swp
 *.swo
 
-# Local development settings
+# OS-specific files
 .DS_Store
+Thumbs.db
 
+# Local development settings
 # ignore files with ~ at the end at any level
 *~*
+
+# Other
+.gitignore.swp
