@@ -41,6 +41,9 @@ from dotenv import load_dotenv, find_dotenv
 # Import system prompts
 from system_prompts import get_prompt
 
+# Import LLMAggregationHandler for advanced aggregation capabilities
+from llm_aggregation_handler import LLMAggregationHandler
+
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
@@ -101,7 +104,9 @@ class DocumentChat:
         except LookupError:
             nltk.download('punkt')
             
-        self.load_and_process_data(tsv_file=tsv_file)
+        self.tsv_file = tsv_file
+        self.agg_handler = LLMAggregationHandler(dataset_path=self.tsv_file)
+        self.load_and_process_data()
 
     def create_chunks(self, text: str) -> List[str]:
         """Split text into overlapping chunks for better context management"""
@@ -130,10 +135,11 @@ class DocumentChat:
             
         return chunks
 
-    def load_and_process_data(self, tsv_file='ijhs-astro-math-docs.tsv'):
+    def load_and_process_data(self):
         """Load and process the document data, creating searchable chunks"""
         try:
-            self.df = pd.read_csv(tsv_file, sep='\t').drop(
+            # Load the TSV file and drop unnecessary columns
+            self.df = pd.read_csv(self.tsv_file, sep='\t').drop(
                 columns=['size_in_kb', 'cum_size_in_kb', 'pdf', 'full_pdf_path', 'pdf_exists', 'has_text']
             )
             # print(self.df.shape)
@@ -165,7 +171,7 @@ class DocumentChat:
             
             # Initialize search components with proper typing
             self.vectorizer = TfidfVectorizer()
-            sparse_matrix: csr_matrix = self.vectorizer.fit_transform(self.chunks_df['text'].fillna(''))
+            sparse_matrix = self.vectorizer.fit_transform(self.chunks_df['text'].fillna(''))
             self.document_embeddings = sparse_matrix.toarray().astype(np.float32)
             
             dim = self.document_embeddings.shape[1]
@@ -416,7 +422,22 @@ class DocumentChat:
         """Generate a response to a user query using appropriate context and model"""
         try:
             if self.is_aggregation_query(query):
-                return self.perform_aggregation(query), None
+                # Use LLMAggregationHandler for advanced aggregation processing
+                try:
+                    response = self.agg_handler.process_query(query)
+                    usage_metadata = response.get('usage_metadata')
+                    
+                    # # Remove generated_code and usage_metadata from the response
+                    # if 'generated_code' in response:
+                    #     del response['generated_code']
+                    # if 'usage_metadata' in response:
+                    #     del response['usage_metadata']
+                        
+                    return response, usage_metadata
+                except Exception as e:
+                    logging.warning(f"Error with LLM aggregation handler: {str(e)}. Falling back to basic aggregation.")
+                    # Fall back to the original method
+                    return self.perform_aggregation(query), None
             
             if self.needs_document_context(query):
                 relevant_chunks = self.search_documents(query)
@@ -536,6 +557,11 @@ Query Type: {self.query_type}"""
             
             final_response = "\n".join(formatted_response)
             self.history.append((message, final_response))
+
+            generated_code = response_data.get("generated_code", None)
+            if generated_code:
+                generated_code = f'''\n---\n```{generated_code}```'''
+                # self.history.append(("System", generated_code))
             
             # Update and store the prompt for display
             try:
@@ -548,7 +574,7 @@ Query Type: {self.query_type}"""
                     )
                     self.last_prompt = f"""Query with context: {message}\n\nRelevant papers:\n{context}"""
                 else:
-                    self.last_prompt = f"Direct query: {message}"
+                    self.last_prompt = f"Direct query: {message} {generated_code}"
             except Exception as e:
                 logging.warning(f"Error formatting prompt display: {e}")
                 self.last_prompt = f"Query: {message}"
