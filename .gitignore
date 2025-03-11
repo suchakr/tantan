@@ -9,8 +9,6 @@ __pycache__/
 # manim files
 media/*
 
-
-
 # Distribution / packaging
 .Python
 build/
@@ -124,6 +122,14 @@ dmypy.json
 
 # VS Code
 .vscode/
+
+# IDE specific files (added from doc_chat/.gitignore)
+.idea/
+*.swp
+*.swo
+
+# Local development settings
+.DS_Store
 
 # ignore files with ~ at the end at any level
 *~*
