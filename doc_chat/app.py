@@ -507,6 +507,24 @@ class NavdhaniUI:
         self.query_type: str = "document"
         self.prompt_name = prompt_name or "default"
         
+        # Message history navigation
+        self.message_history: List[str] = []
+        self.history_index: int = -1
+        
+        # Example queries for dropdown
+        self.example_queries = [
+            "Hello! Can you find papers by Aryabhata on astronomy and also give me a count of all documents in the collection?",
+            "What are the contributions of Indian mathematicians to the field of astronomy?",
+            "Hi there. I'd like to know how many papers are in the collection. Also, what were the major contributions of Indian mathematicians to trigonometry?",
+            "Show me all authors who published after 1950. What were the key discoveries in Indian astronomy during the medieval period?",
+            "List all papers on mathematics. Who was the most prolific author? Summarize the key findings on astronomy.",
+            "Tell me about the Kerala school of mathematics. How many papers do you have on this topic?",
+            "Who developed the concept of zero in Indian mathematics?",
+            "What was Aryabhata's contribution to mathematics and astronomy?",
+            "How did Indian mathematicians calculate the value of pi?",
+            "Compare the astronomical theories of Brahmagupta and Bhaskara II."
+        ]
+        
         # Initialize the prompt splitter for handling composite messages
         # Use HeuristicPromptSplitter by default (no API key needed)
         self.prompt_splitter = HeuristicPromptSplitter()
@@ -550,6 +568,10 @@ Query Type: {self.query_type}"""
         try:
             if not message.strip():
                 return self.history, self.update_stats(None), "Empty query"
+
+            # Add message to history for navigation
+            self.message_history.append(message)
+            self.history_index = len(self.message_history)
 
             # Use prompt splitter to handle composite messages
             grouped_queries = self.prompt_splitter.get_grouped_queries(message)
@@ -748,6 +770,9 @@ Query Type: {"composite" if len(usage_metadata_list) > 1 else self.query_type}""
         self.token_stats = {"total_tokens": 0, "prompt_tokens": 0, "response_tokens": 0}
         self.last_prompt = ""
         self.context_used = False
+        # Clear message history navigation
+        self.message_history = []
+        self.history_index = -1
         return [], f"Token Usage Statistics:\nTotal Tokens: 0\nPrompt Tokens: 0\nResponse Tokens: 0\nSystem Prompt: {self.prompt_name}", "No prompt sent yet"
         
     def change_prompt(self, prompt_name: str) -> Tuple[List[Tuple[str, str]], str, str]:
@@ -762,6 +787,42 @@ Query Type: {"composite" if len(usage_metadata_list) > 1 else self.query_type}""
             self.history.append(("System", error_msg))
             return self.history, self.update_stats(None), "Error occurred while changing prompt"
 
+    def use_example_query(self, example_query: str) -> Tuple[str, List[Tuple[str, str]], str, str]:
+        """Handle selection of an example query from dropdown"""
+        return example_query, self.history, self.update_stats(None), f"Selected example query: {example_query}"
+
+    def navigate_up(self, message: str) -> str:
+        """Navigate backwards through message history"""
+        # If there's no history, return the current message unchanged
+        if not self.message_history:
+            return message
+            
+        # Go back in history
+        if self.history_index > 0:
+            self.history_index -= 1
+            return self.message_history[self.history_index]
+        elif self.history_index == 0:
+            return self.message_history[0]
+        
+        return message
+
+    def navigate_down(self, message: str) -> str:
+        """Navigate forwards through message history"""
+        # If there's no history, return the current message unchanged
+        if not self.message_history:
+            return message
+            
+        # Go forward in history
+        if self.history_index < len(self.message_history) - 1:
+            self.history_index += 1
+            return self.message_history[self.history_index]
+        else:
+            # At the end of history, show empty message box
+            self.history_index = len(self.message_history)
+            return ""
+            
+        return message
+
     def launch(self, share: bool = False):
         """Launch the Gradio interface with proper error handling"""
         try:
@@ -773,10 +834,28 @@ Query Type: {"composite" if len(usage_metadata_list) > 1 else self.query_type}""
                             show_label=True,
                             label="Navadhāni: Indian History of Science Chatbot",
                         )
-                        msg = gr.Textbox(
-                            show_label=False,
-                            placeholder="Type your message here...",
-                        )
+                        
+                        # Message input area
+                        with gr.Row():
+                            msg = gr.Textbox(
+                                show_label=False,
+                                placeholder="Type your message here...",
+                                container=False,
+                                scale=8
+                            )
+                            up_btn = gr.Button("▲", scale=1)
+                            down_btn = gr.Button("▼", scale=1)
+                        
+                        # Example query dropdown
+                        with gr.Row():
+                            example_dropdown = gr.Dropdown(
+                                choices=self.example_queries,
+                                label="Example Queries",
+                                value=None,
+                                container=True,
+                                interactive=True,
+                            )
+                        
                         with gr.Row():
                             reset_btn = gr.Button("New Conversation")
                             
@@ -800,6 +879,7 @@ Query Type: {"composite" if len(usage_metadata_list) > 1 else self.query_type}""
                             lines=10
                         )
 
+                # Connect components with events
                 msg.submit(
                     self.respond,
                     [msg, chatbot],
@@ -814,6 +894,25 @@ Query Type: {"composite" if len(usage_metadata_list) > 1 else self.query_type}""
                     self.change_prompt,
                     [prompt_selector],
                     [chatbot, stats_display, prompt_display]
+                )
+                
+                # Connect example dropdown
+                example_dropdown.change(
+                    self.use_example_query,
+                    [example_dropdown],
+                    [msg, chatbot, stats_display, prompt_display]
+                )
+                
+                # Connect navigation buttons - fixed implementation
+                up_btn.click(
+                    self.navigate_up,
+                    [msg],
+                    [msg]
+                )
+                down_btn.click(
+                    self.navigate_down, 
+                    [msg],
+                    [msg]
                 )
 
             interface.launch(share=share)
