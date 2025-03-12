@@ -561,11 +561,16 @@ Query Type: {self.query_type}"""
                     
             # Initialize response components
             final_responses = []
+            query_response_pairs = []  # Store pairs of queries and their responses
             combined_references = []
             all_usage_metadata = []
             confidence_levels = []
             contexts_used = []
             generated_code = None
+            
+            # Track if this is a composite query (more than one query)
+            total_queries = sum(len(queries) for queries in grouped_queries.values())
+            is_composite = total_queries > 1
             
             # Process each query group in a logical order (conversational -> format -> aggregation -> document)
             for query_type in [QueryType.CONVERSATIONAL, QueryType.FORMAT, QueryType.AGGREGATION, QueryType.DOCUMENT, QueryType.UNKNOWN]:
@@ -584,8 +589,11 @@ Query Type: {self.query_type}"""
                     response_data, usage_metadata = self.chat.generate_response(query)
                     
                     # Collect response components
-                    if response_data.get("answer"):
-                        final_responses.append(response_data["answer"])
+                    answer = response_data.get("answer", "")
+                    if answer:
+                        final_responses.append(answer)
+                        # Store the query-response pair
+                        query_response_pairs.append((query, answer))
                     
                     if response_data.get("references"):
                         combined_references.extend(response_data["references"])
@@ -599,8 +607,26 @@ Query Type: {self.query_type}"""
                     if response_data.get("generated_code") and not generated_code:
                         generated_code = response_data.get("generated_code")
             
-            # Format the overall response
-            final_response = "\n\n".join(final_responses)
+            # Format the overall response based on whether it's composite or simple
+            if is_composite:
+                # Format each query-response pair as a visual block
+                formatted_blocks = []
+                
+                for i, (query, response) in enumerate(query_response_pairs):
+                    formatted_blocks.append(f"""
+▶️ Query {i+1}: {query}
+
+{response}
+---""")
+                
+                final_response = "\n".join(formatted_blocks)
+                
+                # If the message started with a greeting, add a small intro
+                if any(greeting in message.lower() for greeting in ["hello", "hi ", "hey", "greetings"]):
+                    final_response = f"I've answered each part of your question separately:\n{final_response}"
+            else:
+                # Simple case: just join the responses
+                final_response = "\n\n".join(final_responses)
             
             # Add references if any context was used
             if any(contexts_used) and combined_references:
@@ -615,7 +641,7 @@ Query Type: {self.query_type}"""
                 
                 # Add references section
                 if unique_references:
-                    final_response += "\n\nReferences:"
+                    final_response += "\n\n📚 References:"
                     for ref in unique_references:
                         if all(ref.get(k) for k in ["title", "author", "url"]):
                             final_response += f"\n- {ref['title']} by {ref['author']} - {ref['url']}"
@@ -633,7 +659,8 @@ Query Type: {self.query_type}"""
                     elif min_confidence == 2:
                         overall_confidence = "medium"
                 
-                final_response += f"\n\nConfidence: {overall_confidence}"
+                confidence_emoji = "🟢" if overall_confidence == "high" else "🟡" if overall_confidence == "medium" else "🔴"
+                final_response += f"\n\nConfidence: {confidence_emoji} {overall_confidence}"
             
             # Update conversation history
             self.history.append((message, final_response))
