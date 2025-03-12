@@ -12,6 +12,7 @@ Features:
 5. Ability to handle both document-specific queries and collection-level statistics
 6. Gradio-based UI for interactive conversations
 7. Token usage tracking and conversation history management
+8. Composite message handling with prompt splitting
 """
 
 import os
@@ -43,6 +44,9 @@ from system_prompts import get_prompt
 
 # Import LLMAggregationHandler for advanced aggregation capabilities
 from llm_aggregation_handler import LLMAggregationHandler
+
+# Import prompt splitter for composite message handling
+from prompt_splitter import HybridPromptSplitter, PromptSplitter, HeuristicPromptSplitter, QueryType
 
 # Configure logging
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
@@ -502,7 +506,21 @@ class NavdhaniUI:
         self.context_used: bool = False
         self.query_type: str = "document"
         self.prompt_name = prompt_name or "default"
-
+        
+        # Initialize the prompt splitter for handling composite messages
+        # Use HeuristicPromptSplitter by default (no API key needed)
+        self.prompt_splitter = HeuristicPromptSplitter()
+        # Try to initialize a HybridPromptSplitter if an API key is available
+        try:
+            api_key = os.getenv('GEMINI_API_KEY')
+            if api_key:
+                self.prompt_splitter = HybridPromptSplitter(api_key)
+                logging.info("Using HybridPromptSplitter for composite message handling")
+            else:
+                logging.info("Using HeuristicPromptSplitter for composite message handling (no API key)")
+        except Exception as e:
+            logging.warning(f"Failed to initialize HybridPromptSplitter: {e}. Using HeuristicPromptSplitter instead.")
+            
     def update_stats(self, usage_metadata: Optional[Any]) -> str:
         """Update token usage statistics and return formatted stats string"""
         try:
@@ -515,7 +533,6 @@ class NavdhaniUI:
                 )
         except Exception as e:
             logging.warning(f"Error updating token stats: {str(e)}")
-
         # context_status = "With document context" if self.context_used else "Without document context"
         return f"""Token Usage Statistics:
 Total Tokens: {self.token_stats['total_tokens']}
@@ -533,60 +550,171 @@ Query Type: {self.query_type}"""
         try:
             if not message.strip():
                 return self.history, self.update_stats(None), "Empty query"
+
+            # Use prompt splitter to handle composite messages
+            grouped_queries = self.prompt_splitter.get_grouped_queries(message)
+            
+            # Log the split queries for debugging
+            for query_type, queries in grouped_queries.items():
+                if queries:
+                    logging.info(f"Found {len(queries)} queries of type {query_type.name}")
+                    
+            # Initialize response components
+            final_responses = []
+            combined_references = []
+            all_usage_metadata = []
+            confidence_levels = []
+            contexts_used = []
+            generated_code = None
+            
+            # Process each query group in a logical order (conversational -> format -> aggregation -> document)
+            for query_type in [QueryType.CONVERSATIONAL, QueryType.FORMAT, QueryType.AGGREGATION, QueryType.DOCUMENT, QueryType.UNKNOWN]:
+                queries = grouped_queries.get(query_type, [])
                 
-            self.context_used = self.chat.needs_document_context(message)
-            self.query_type = self.chat.query_type
-            response_data, usage_metadata = self.chat.generate_response(message)
+                if not queries:
+                    continue
+                
+                for query in queries:
+                    # Determine context needs based on query type
+                    self.context_used = self.chat.needs_document_context(query)
+                    self.query_type = self.chat.query_type
+                    contexts_used.append(self.context_used)
+                    
+                    # Generate response for this specific query
+                    response_data, usage_metadata = self.chat.generate_response(query)
+                    
+                    # Collect response components
+                    if response_data.get("answer"):
+                        final_responses.append(response_data["answer"])
+                    
+                    if response_data.get("references"):
+                        combined_references.extend(response_data["references"])
+                    
+                    if response_data.get("confidence_level"):
+                        confidence_levels.append(response_data["confidence_level"])
+                        
+                    if usage_metadata:
+                        all_usage_metadata.append(usage_metadata)
+                        
+                    if response_data.get("generated_code") and not generated_code:
+                        generated_code = response_data.get("generated_code")
             
-            # Format the response with references and confidence level
-            formatted_response = [response_data["answer"]]
-
-            if self.context_used:
-                if response_data.get("references"):
-                    formatted_response.append("\nReferences:")
-                    for ref in response_data["references"]:
+            # Format the overall response
+            final_response = "\n\n".join(final_responses)
+            
+            # Add references if any context was used
+            if any(contexts_used) and combined_references:
+                # Deduplicate references by title
+                seen_titles = set()
+                unique_references = []
+                for ref in combined_references:
+                    title = ref.get("title", "")
+                    if title and title not in seen_titles:
+                        seen_titles.add(title)
+                        unique_references.append(ref)
+                
+                # Add references section
+                if unique_references:
+                    final_response += "\n\nReferences:"
+                    for ref in unique_references:
                         if all(ref.get(k) for k in ["title", "author", "url"]):
-                            formatted_response.append(
-                                f"- {ref['title']} by {ref['author']} - {ref['url']}"
-                            )
+                            final_response += f"\n- {ref['title']} by {ref['author']} - {ref['url']}"
             
-            if response_data.get("confidence_level"):
-                formatted_response.append(
-                    f"\nConfidence: {response_data['confidence_level']}"
-                )
+            # Add overall confidence level
+            if confidence_levels:
+                # Use the lowest confidence level
+                confidence_map = {"high": 3, "medium": 2, "low": 1}
+                confidence_values = [confidence_map.get(level, 0) for level in confidence_levels]
+                overall_confidence = "low"
+                if confidence_values:
+                    min_confidence = min(confidence_values)
+                    if min_confidence == 3:
+                        overall_confidence = "high"
+                    elif min_confidence == 2:
+                        overall_confidence = "medium"
+                
+                final_response += f"\n\nConfidence: {overall_confidence}"
             
-            final_response = "\n".join(formatted_response)
+            # Update conversation history
             self.history.append((message, final_response))
-
-            generated_code = response_data.get("generated_code", None)
-            if generated_code:
-                generated_code = f'''\n---\n```{generated_code}```'''
-                # self.history.append(("System", generated_code))
             
-            # Update and store the prompt for display
-            try:
-                if self.context_used:
-                    relevant_docs = self.chat.search_documents(message)
-                    context = "\n\n=============\n".join(
-                        f"Title: {doc['paper']}\nAuthor: {doc['author']}\n"
-                        f"Content: {doc['text'][:200]}..."
-                        for doc in relevant_docs
-                    )
-                    self.last_prompt = f"""Query with context: {message}\n\nRelevant papers:\n{context}"""
-                else:
-                    self.last_prompt = f"Direct query: {message} {generated_code}"
-            except Exception as e:
-                logging.warning(f"Error formatting prompt display: {e}")
-                self.last_prompt = f"Query: {message}"
+            # Update stats for all usage metadata
+            stats_display = self.update_stats_from_multiple(all_usage_metadata)
             
-            return self.history, self.update_stats(usage_metadata), self.last_prompt
+            # Format the prompt display
+            prompt_display = self.format_prompt_display(message, grouped_queries)
+            
+            return self.history, stats_display, prompt_display
             
         except Exception as e:
             error_msg = f"Error processing request: {str(e)}"
             logging.error(error_msg)
             self.history.append((message, error_msg))
             return self.history, self.update_stats(None), "Error occurred during processing"
+    
+    def update_stats_from_multiple(self, usage_metadata_list: List[Any]) -> str:
+        """Update token usage statistics from multiple metadata objects"""
+        try:
+            for metadata in usage_metadata_list:
+                if metadata:
+                    self.token_stats["prompt_tokens"] += getattr(metadata, 'prompt_token_count', 0)
+                    self.token_stats["response_tokens"] += getattr(metadata, 'candidates_token_count', 0)
+                    
+            self.token_stats["total_tokens"] = (
+                self.token_stats["prompt_tokens"] + 
+                self.token_stats["response_tokens"]
+            )
+            
+        except Exception as e:
+            logging.warning(f"Error updating token stats: {str(e)}")
+            
+        return f"""Token Usage Statistics:
+Total Tokens: {self.token_stats['total_tokens']}
+Prompt Tokens: {self.token_stats['prompt_tokens']}
+Response Tokens: {self.token_stats['response_tokens']}
+System Prompt: {self.prompt_name}
+Query Type: {"composite" if len(usage_metadata_list) > 1 else self.query_type}"""
 
+    def format_prompt_display(self, message: str, grouped_queries: Dict[QueryType, List[str]]) -> str:
+        """Format the prompt display with information about split queries"""
+        try:
+            # Count the total number of queries
+            total_queries = sum(len(queries) for queries in grouped_queries.values())
+            
+            if total_queries <= 1:
+                # Simple case: just one query
+                try:
+                    if self.context_used:
+                        relevant_docs = self.chat.search_documents(message)
+                        context = "\n\n=============\n".join(
+                            f"Title: {doc['paper']}\nAuthor: {doc['author']}\n"
+                            f"Content: {doc['text'][:200]}..."
+                            for doc in relevant_docs
+                        )
+                        return f"""Query with context: {message}\n\nRelevant papers:\n{context}"""
+                    else:
+                        return f"Direct query: {message}"
+                except Exception as e:
+                    logging.warning(f"Error formatting simple prompt display: {e}")
+                    return f"Query: {message}"
+            else:
+                # Complex case: multiple queries
+                display = f"Composite query detected: {message}\n\nSplit into {total_queries} sub-queries:\n"
+                
+                for query_type, queries in grouped_queries.items():
+                    if not queries:
+                        continue
+                        
+                    display += f"\n{query_type.name} queries ({len(queries)}):\n"
+                    for i, query in enumerate(queries):
+                        display += f"{i+1}. {query}\n"
+                
+                return display
+                
+        except Exception as e:
+            logging.warning(f"Error formatting prompt display: {e}")
+            return f"Query: {message}"
+            
     def reset_conversation(self) -> Tuple[List[Tuple[str, str]], str, str]:
         """Reset the conversation state and statistics"""
         self.history = []
@@ -594,7 +722,7 @@ Query Type: {self.query_type}"""
         self.last_prompt = ""
         self.context_used = False
         return [], f"Token Usage Statistics:\nTotal Tokens: 0\nPrompt Tokens: 0\nResponse Tokens: 0\nSystem Prompt: {self.prompt_name}", "No prompt sent yet"
-
+        
     def change_prompt(self, prompt_name: str) -> Tuple[List[Tuple[str, str]], str, str]:
         """Change the system prompt and reset the conversation"""
         try:
@@ -700,6 +828,46 @@ def run_tests():
             logging.info(f"Response with {prompt_name} prompt (truncated):")
             logging.info(response["answer"][:100] + "...")
             
+        # Test composite queries with prompt splitter
+        logging.info("\n===== Testing Composite Queries with Prompt Splitter =====")
+        ui = NavdhaniUI()
+        
+        composite_test_queries = [
+            "Hello! I'm interested in Indian mathematics. How many papers do you have on this topic? Could you summarize the key concepts in Indian mathematics according to these papers?",
+            
+            "Hi, can you help me with two things? First, list all authors who wrote about astronomy. Second, what were the contributions of Aryabhata to mathematics? Please format the response in markdown.",
+            
+            "1. How many total papers are in the collection? 2. What are the major mathematical achievements described in these papers? 3. Display the results in a table format if possible.",
+            
+            "Thanks for your help earlier. Now I want information about the Kerala school of mathematics. Also, show me statistics about how many papers cover this topic. Format the output with bullet points.",
+            
+            "Hello. I have multiple questions: What was the concept of zero in Indian mathematics? How many papers discuss this? Who were the key contributors to this concept? Please make the response concise and well-structured."
+        ]
+        
+        # Test each composite query
+        for i, query in enumerate(composite_test_queries):
+            logging.info(f"\nTesting composite query #{i+1}: {query}")
+            
+            # Use the prompt splitter to break down the query
+            grouped_queries = ui.prompt_splitter.get_grouped_queries(query)
+            
+            # Log how the query was split
+            logging.info(f"Query was split into {sum(len(queries) for queries in grouped_queries.values())} parts:")
+            for query_type, queries in grouped_queries.items():
+                if queries:
+                    logging.info(f"- {query_type.name}: {len(queries)}")
+                    for q in queries:
+                        logging.info(f"  * {q}")
+            
+            # Process the composite query through NavdhaniUI
+            chat_history = []
+            history, stats, prompt_display = ui.respond(query, chat_history)
+            
+            # Log the response
+            if history:
+                logging.info(f"Response (truncated): {history[-1][1][:200]}...")
+            logging.info(f"Stats: {stats}")
+            
     except Exception as e:
         logging.error(f"Test execution failed: {e}")
         raise
@@ -716,7 +884,7 @@ if __name__ == "__main__":
 
     logging.info(f"Interactive mode: {INTERACTIVE_MODE}")
     try:
-        if INTERACTIVE_MODE:
+        if (INTERACTIVE_MODE):
             run_tests()
         else:
             pass

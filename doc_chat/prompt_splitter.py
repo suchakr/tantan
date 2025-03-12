@@ -573,7 +573,7 @@ if __name__ == "__main__":
         
         "1. List all papers on mathematics\n2. Who was the most prolific author?\n3. Summarize the key findings on astronomy",
         
-        "Thanks for your help earlier. Now I want to know about the Kerala school of mathematics. How many papers do you have on this topic?"
+        "Thanks for your help earlier. Now I want to know about the Kerala school of mathematics. How many papers do you have on this topic. Answer in markdown",
     ]
     
     def display_split_results(prompt: str, splitter: PromptSplitter, splitter_name: str) -> None:
@@ -605,7 +605,7 @@ if __name__ == "__main__":
         print("-" * 80)
     
     # Test each splitter with all prompts
-    for prompt in test_prompts:
+    for prompt in test_prompts[-1:]:
         # Always test the heuristic splitter
         display_split_results(prompt, heuristic_splitter, "Heuristic Prompt Splitter")
         
