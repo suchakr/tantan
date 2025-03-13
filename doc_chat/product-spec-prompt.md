@@ -5,6 +5,7 @@ Navadhāni is a specialized academic document chat system focused on papers from
 
 ## Data Source
 The app allows users to converse with the contents of ijhs-astro-math-docs.tsv, which has columns:
+
     #                   int64   (index - ignore)
     paper              object   (title)
     author             object   (author)
@@ -18,6 +19,7 @@ The app allows users to converse with the contents of ijhs-astro-math-docs.tsv, 
     pdf_exists           bool   (always True -ignore) 
     has_text             bool   (one of raster or text - ignore)
     text               object   (content)
+
 
 ## Core Features
 1. Document search and retrieval via TF-IDF vectorization and FAISS similarity search
