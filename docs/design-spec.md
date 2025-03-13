@@ -73,6 +73,7 @@ The following table maps key product specifications to their implementation in t
 ### DocumentChat
 
 This is the core engine that handles:
+
 - Document processing with `load_and_process_data()`
 - Text chunking with `create_chunks()`
 - Vector search with `search_documents()`
@@ -81,6 +82,7 @@ This is the core engine that handles:
 - Collection statistics with `perform_aggregation()`
 
 **Code-Spec Connection**:
+
 - Implements core features #1-5 from product spec
 - Handles document search, chunking, and response generation
 - Uses TF-IDF and FAISS as specified
@@ -88,6 +90,7 @@ This is the core engine that handles:
 ### NavdhaniUI
 
 The user interface layer built with Gradio that:
+
 - Manages conversation with `respond()`
 - Tracks token usage with `update_stats()`
 - Handles message history navigation
@@ -95,6 +98,7 @@ The user interface layer built with Gradio that:
 - Controls the Gradio interface with `launch()`
 
 **Code-Spec Connection**:
+
 - Implements UI components section from product spec
 - Creates two-pane interface with chat and stats
 - Provides query history navigation
@@ -103,6 +107,7 @@ The user interface layer built with Gradio that:
 ### DocumentChunk
 
 A dataclass that represents a chunk of text from a document with metadata:
+
 - `paper`: Title of the paper
 - `author`: Author of the paper
 - `url`: URL to the paper
@@ -111,6 +116,7 @@ A dataclass that represents a chunk of text from a document with metadata:
 - `chunk_idx`: Chunk index within the document
 
 **Code-Spec Connection**:
+
 - Implements the data structure for text chunking (Core Feature #2)
 - Maintains document metadata for generating references
 
@@ -119,33 +125,39 @@ A dataclass that represents a chunk of text from a document with metadata:
 #### Prompt Splitter
 
 Handles composite message processing by:
+
 - Splitting complex queries into simpler ones
 - Classifying queries by type
 - Supporting hybrid splitting methods
 
 **Code-Spec Connection**:
+
 - Implements composite message handling (Core Feature #6)
 - Supports multiple query types as specified
 
 #### LLMAggregationHandler
 
 Specialized component for collection-level statistics:
+
 - Processes aggregation queries
 - Provides database-like functionality
 - Generates statistical summaries
 
 **Code-Spec Connection**:
+
 - Implements collection statistics capabilities
 - Handles "aggregation" query type
 
 #### System Prompts
 
 Provides different conversation styles:
+
 - Default: Standard information delivery
 - Conversational: More friendly and engaging
 - Expert: Detailed, academic style
 
 **Code-Spec Connection**:
+
 - Implements the configurable system prompts from LLM Integration section
 
 ## Data Flow
@@ -183,6 +195,7 @@ For a detailed view of this process flow, see the sequence diagram in [design-di
 ### Document Processing
 
 Documents are processed in the following steps:
+
 1. Load TSV file with pandas
 2. Clean and prepare text
 3. Split documents into overlapping chunks
@@ -192,6 +205,7 @@ Documents are processed in the following steps:
 ### Query Processing
 
 The system handles different types of queries:
+
 - **Document queries**: Use document context from vector search
 - **Aggregation queries**: Generate collection statistics
 - **Conversational queries**: Direct interaction without document context
@@ -200,6 +214,7 @@ The system handles different types of queries:
 ### Response Format
 
 Responses are structured in JSON format:
+
 ```json
 {
   "answer": "The detailed answer text",

@@ -39,7 +39,7 @@ class LLMAggregationHandler:
     """
     
     def __init__(self, 
-                 dataset_path: str = 'ijhs-astro-math-docs.tsv',
+                 dataset_path: str = '../data/ijhs-astro-math-docs.tsv',
                  model_name: str = "gemini-1.5-pro"):
         """
         Initialize the aggregation handler with dataset path and LLM settings
@@ -388,8 +388,9 @@ class LLMAggregationHandler:
             pass
 
 if __name__ == "__main__":
-    small_file = "ijhs-astro-math-docs.tsv"
-    big_file = "/Users/sunder/projects/cahc/cahc-utils/scrape/scraped/ijhs-classified-gemini_classify_text-textified~.tsv"
+    small_file = "../data/ijhs-astro-math-docs-sample.tsv"
+    big_file = "../data/ijhs-astro-math-docs.tsv"
+    # big_file = "/Users/sunder/projects/cahc/cahc-utils/scrape/scraped/ijhs-classified-gemini_classify_text-textified~.tsv"
     handler = LLMAggregationHandler(dataset_path=big_file)
     handler.test_handler()
     handler.cleanup()

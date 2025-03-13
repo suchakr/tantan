@@ -1,9 +1,11 @@
 # Navadhāni: Indian History of Science Chatbot
 
 ## Overview
+
 Navadhāni is a specialized academic document chat system focused on papers from the Indian Journal of History of Science (IJHS). The application lets users converse with and query a collection of academic papers, with particular emphasis on Indian mathematics and astronomy.
 
 ## Data Source
+
 The app allows users to converse with the contents of ijhs-astro-math-docs.tsv, which has columns:
 
     #                   int64   (index - ignore)
@@ -20,8 +22,8 @@ The app allows users to converse with the contents of ijhs-astro-math-docs.tsv, 
     has_text             bool   (one of raster or text - ignore)
     text               object   (content)
 
-
 ## Core Features
+
 1. Document search and retrieval via TF-IDF vectorization and FAISS similarity search
 2. Text chunking for effective context management
 3. Integration with Google's Gemini API for natural language understanding
@@ -33,23 +35,27 @@ The app allows users to converse with the contents of ijhs-astro-math-docs.tsv, 
 ## Technical Components
 
 ### LLM Integration
+
 - Use google.generativeai as genai
 - GEMINI_API_KEY is set in a .env file and loaded using dotenv()
 - Uses the "gemini-2.0-flash-exp" model
 - Configurable system prompts (default, conversational, expert)
 
 ### Vector Database
+
 - Use FAISS for vector search capabilities
 - TF-IDF vectorizer for document embedding
 - Document chunking with overlapping windows for better context
 
 ### Query Processing
+
 - Automatic query type detection (document, aggregation, conversational)
 - Composite message handling through prompt splitting
 - Support for collection-level statistics and aggregation queries
 - Message history navigation
 
 ## UI Components (Gradio-based)
+
 - Chat interface with message history
 - Statistics panel showing token usage
 - Example query dropdown for user guidance
@@ -59,24 +65,28 @@ The app allows users to converse with the contents of ijhs-astro-math-docs.tsv, 
 - Last prompt display showing context used
 
 ### Chat Pane
+
 - Text input anchored to the bottom for user messages
 - Chronological message display with different styling for user vs. bot
 - Support for references display with paper title, author and URL
 - Confidence level indicators
 
 ### Stats Pane
+
 - Token usage statistics from Gemini response metadata
 - Total tokens, prompt tokens, and response tokens
 - Current system prompt indicator
 - Query type indicator
 
 ## Query Types
+
 1. Document queries - search for specific information in papers
 2. Aggregation queries - statistics about the collection (paper counts, authors, etc.)
 3. Conversational queries - general interaction without document context
 4. Composite queries - multiple question types in a single message
 
 ## Response Format
+
 - Main answer text
 - References to source papers when applicable
 - Visual confidence indicator (high/medium/low)

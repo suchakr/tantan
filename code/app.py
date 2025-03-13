@@ -81,7 +81,7 @@ class DocumentChat:
     """Handles document processing, searching, and response generation"""
     
     def __init__(self, chunk_size: int = 500, chunk_overlap: int = 100, prompt_name: str = "" ,
-                 tsv_file: str='ijhs-astro-math-docs.tsv'):
+                 tsv_file: str='../data/ijhs-astro-math-docs.tsv'):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.df: Optional[pd.DataFrame] = None
@@ -513,6 +513,31 @@ class NavdhaniUI:
         
         # Example queries for dropdown
         self.example_queries = [
+            # conversational queries
+            "#==== conversational queries",
+            "Hello!" ,
+
+            # aggregation queries
+            "#==== aggregation queries"
+            "How many papers are in the collection?",
+            "List all papers in the collection.",
+            "Papers by topic - count",
+            "List papers by authors ",
+            "List papers by authors named Iyengar"
+            "List papers , url by authors named Iyengar",
+
+            # document queries
+            "#==== document queries",
+            "Let us discuss RSin",
+            "Compare the astronomical theories of Brahmagupta and Bhaskara II."
+            "Which papers discuss Aryabhata",
+            "Can you find papers on Aryabhata and Bhaskara?",
+            "Discuss the paper by Iyengar  that discusses Equinoctial full moon",
+            '"Transit of sun through the seasonal naksatra cycle" paper gist'
+
+
+            # composite queries
+            "#==== composite queries - high risk",
             "Hello! Can you find papers by Aryabhata on astronomy and also give me a count of all documents in the collection?",
             "What are the contributions of Indian mathematicians to the field of astronomy?",
             "Hi there. I'd like to know how many papers are in the collection. Also, what were the major contributions of Indian mathematicians to trigonometry?",
@@ -522,7 +547,6 @@ class NavdhaniUI:
             "Who developed the concept of zero in Indian mathematics?",
             "What was Aryabhata's contribution to mathematics and astronomy?",
             "How did Indian mathematicians calculate the value of pi?",
-            "Compare the astronomical theories of Brahmagupta and Bhaskara II."
         ]
         
         # Initialize the prompt splitter for handling composite messages
