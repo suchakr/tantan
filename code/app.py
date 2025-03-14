@@ -80,7 +80,7 @@ class DocumentChunk:
 class DocumentChat:
     """Handles document processing, searching, and response generation"""
     
-    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 100, prompt_name: str = "" ,
+    def __init__(self, chunk_size: int = 2000, chunk_overlap: int = 200, prompt_name: str = "" ,
                  tsv_file: str='../data/ijhs-astro-math-docs.tsv'):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -102,8 +102,9 @@ class DocumentChat:
             system_instruction=system_prompt,
         )
         
-        # Initialize NLTK
+        # Initialize NLTK and download required data
         try:
+            nltk.download('punkt')
             nltk.data.find('tokenizers/punkt')
         except LookupError:
             nltk.download('punkt')
@@ -173,19 +174,31 @@ class DocumentChat:
             self.chunks_df = pd.DataFrame(chunks_data)
             logging.info(f"Loaded {len(self.df)} documents, created {len(self.chunks_df)} chunks")
             
-            # Initialize search components with proper typing
-            self.vectorizer = TfidfVectorizer()
+            # Initialize search components with proper typing - keeping sparse format
+            self.vectorizer = TfidfVectorizer(max_features=10000)  # Limit features
             sparse_matrix = self.vectorizer.fit_transform(self.chunks_df['text'].fillna(''))
-            self.document_embeddings = sparse_matrix.toarray().astype(np.float32)
             
-            dim = self.document_embeddings.shape[1]
+            # Convert to float32 while keeping sparse format
+            self.document_embeddings = sparse_matrix.astype(np.float32)
+            
+            # Initialize FAISS index with smaller dimension
+            dim = self.vectorizer.get_feature_names_out().shape[0]
             self.index = faiss.IndexFlatL2(dim)
-            if self.document_embeddings is not None:
-                self.index.add(self.document_embeddings)
+            
+            # Convert sparse to dense only for small batches
+            batch_size = 1000
+            for i in range(0, sparse_matrix.shape[0], batch_size):
+                end_idx = min(i + batch_size, sparse_matrix.shape[0])
+                batch = sparse_matrix[i:end_idx].toarray().astype(np.float32)
+                self.index.add(batch)
+                
             logging.info("Search components initialized successfully")
             
         except FileNotFoundError:
-            logging.error(f"{tsv_file} not found")
+            logging.error(f"{self.tsv_file} not found")
+            raise
+        except Exception as e:
+            logging.error(f"Error in load_and_process_data: {str(e)}")
             raise
 
     def search_documents(self, query: str, k: int = 5) -> List[Dict]:
@@ -193,10 +206,10 @@ class DocumentChat:
         if not isinstance(self.vectorizer, TfidfVectorizer) or self.index is None or self.chunks_df is None:
             raise ValueError("Search components not initialized")
             
-        query_matrix: csr_matrix = self.vectorizer.transform([query])  # type: ignore
+        query_matrix = self.vectorizer.transform([query])
         query_vector = query_matrix.toarray().astype(np.float32)
         
-        # Use standard FAISS search API with proper return values
+        # Use standard FAISS search API
         distances, indices = self.index.search(query_vector, k)
         
         # Get relevant chunks and deduplicate by original document
